@@ -66,7 +66,9 @@ void SystemClock_Config(void);
 #include "pid.h"
 #include "dwt.h"
 
-pid_type_def pid_cur;
+pid_type_def pid_cur_q;
+pid_type_def pid_cur_d;
+
 float whl_whl=0.0f;
 
 #define _3PI_2 4.71238898038f
@@ -74,7 +76,6 @@ float whl_whl=0.0f;
 #define _constrain(amt,low,high) ((amt)<(low)?(low):((amt)>(high)?(high):(amt)))
 float voltage_limit=24.0f;
 float voltage_power_supply=24.0f;
-float shaft_angle=0,open_loop_timestamp=0;
 float zero_electric_angle=0,Ualpha,Ubeta=0,Ua=0,Ub=0,Uc=0,dc_a=0,dc_b=0,dc_c=0;
 int DIR= 1;    //传感器方向
 int PP=14;    //电机极对数
@@ -94,15 +95,7 @@ float _normalizeAngle(float angle){
   float a = fmod(angle, 2*PI);   //取余运算可以用于归一化，列出特殊值例子算便知
   return a >= 0 ? a : (a + 2*PI);
 }
-void setPhaseVoltage(float Uq,float Ud, float angle_el) {
-  angle_el = _normalizeAngle(angle_el + zero_electric_angle);  // 帕克逆变换
-  Ualpha =  -Uq*arm_sin_f32(angle_el);
-  Ubeta =   Uq*arm_cos_f32(angle_el);
-  Ua = Ualpha + voltage_power_supply/2;  // 克拉克逆变换
-  Ub = (sqrt(3)*Ubeta-Ualpha)/2 + voltage_power_supply/2;
-  Uc = (-Ualpha-sqrt(3)*Ubeta)/2 + voltage_power_supply/2;
-  setPwm(Ua,Ub,Uc);
-}
+
 float my_position=0.0f;
 uint8_t as5600_data[2] = {};
 uint16_t raw_angle;
@@ -126,45 +119,54 @@ float getAngle(){
   angle_prev = val;
   return (float)full_rotations * 6.28318530718f + angle_prev;
 }
-void setTorque(float Uq,float angle_el) {
+
+void setTorque_QD(float Uq, float Ud, float angle_el) {
   getAngle(); //更新传感器数值
-  Uq=_constrain(Uq,-(voltage_power_supply)/2,(voltage_power_supply)/2);
-  float Ud=0;
+  // 限制 Uq 和 Ud 的范围
+  Uq = _constrain(Uq, -(voltage_power_supply)/2, (voltage_power_supply)/2);
+  Ud = _constrain(Ud, -(voltage_power_supply)/2, (voltage_power_supply)/2);
   angle_el = _normalizeAngle(angle_el);
-  // 帕克逆变换
-  Ualpha =  -Uq*arm_sin_f32(angle_el);
-  Ubeta =   Uq*arm_cos_f32(angle_el);
-  // 克拉克逆变换
+  // 提前计算 sin 和 cos，节省计算资源
+  float ct = arm_cos_f32(angle_el);
+  float st = arm_sin_f32(angle_el);
+  // 帕克逆变换 (Inverse Park Transform)
+  Ualpha = Ud * ct - Uq * st;
+  Ubeta  = Ud * st + Uq * ct;
+  // 克拉克逆变换 (Inverse Clarke Transform)
   Ua = Ualpha + voltage_power_supply/2;
-  Ub = (sqrt(3.0f)*Ubeta-Ualpha)/2.0f + voltage_power_supply/2.0f;
-  Uc = (-Ualpha-sqrt(3.0f)*Ubeta)/2.0f + voltage_power_supply/2.0f;
-  setPwm(Ua,Ub,Uc);
+  Ub = (sqrtf(3.0f)*Ubeta - Ualpha)/2.0f + voltage_power_supply/2.0f;
+  Uc = (-Ualpha - sqrtf(3.0f)*Ubeta)/2.0f + voltage_power_supply/2.0f;
+  setPwm(Ua, Ub, Uc);
 }
 
-void DFOC_M0_setTorque(float Target){
-  setTorque(Target,_electricalAngle());
-}
 // 定时器更新中断回调函数
 float I_u = 0.0f;
 float I_v = 0.0f;
 float I_w = 0.0f;
 float I_q = 0.0f;
+float I_q1_I_d2[2] = {0.0f,0.0f};
 int16_t I_cnt = 0;
 uint8_t I_flag = 0;
 #define _1_SQRT3 0.57735026919f
 #define _2_SQRT3 1.15470053838f
 #define SQRT3_2 0.8660254038f
 float my_U = 0;
+float my_Iq_out = 0.0f;
+float my_Id_out = 0.0f;
 int32_t whl_cnt = 0;
 float speed_rpm = 0.0f;
-float cal_Iq_Id(float current_a,float current_c,float current_b ,float angle_el){
-  float I_alpha=0.66666667f*(current_a - 0.5f*current_b - 0.5f*current_c);
-  float I_beta = _1_SQRT3*(current_b - current_c);
-  float ct = arm_cos_f32(angle_el);
-  float st = arm_sin_f32(angle_el);
-  float I_q = I_beta * ct - I_alpha * st;
-  return I_q;
+
+void cal_Iq_Id(float current_a, float current_c, float current_b, float angle_el, float *ptr_Iq, float *ptr_Id) {
+    float I_alpha = 0.66666667f * (current_a - 0.5f * current_b - 0.5f * current_c);
+    float I_beta = _1_SQRT3 * (current_b - current_c);
+    float ct = arm_cos_f32(angle_el);
+    float st = arm_sin_f32(angle_el);
+
+    // Park变换计算 Id (直轴) 和 Iq (交轴)
+    *ptr_Iq = I_beta * ct - I_alpha * st;
+    *ptr_Id = I_alpha * ct + I_beta * st;
 }
+
 float elecangle =0;
 int first_cnt = 0;
 
@@ -178,8 +180,8 @@ void process_adc(const uint16_t* adc_data )
   static float Iw_offset = 0.0f;
   last_Iu = I_u;
   last_Iw = I_w;
-  I_u = 0.8f*(((float)(-(adc_data[0] - Iu_offset))*3.3f/4096.0f)/50.0f/0.01f) + 0.2f*last_Iu;
-  I_w = 0.8f*(((float)(-(adc_data[1] - Iw_offset))*3.3f/4096.0f)/50.0f/0.01f) + 0.2f*last_Iw;
+  I_u = 0.9f*(((float)(-(adc_data[0] - Iu_offset))*3.3f/4096.0f)/50.0f/0.01f) + 0.1f*last_Iu;
+  I_w = 0.9f*(((float)(-(adc_data[1] - Iw_offset))*3.3f/4096.0f)/50.0f/0.01f) + 0.1f*last_Iw;
   I_v = -I_u - I_w;
 
   if (I_flag < 2){
@@ -201,19 +203,20 @@ void process_adc(const uint16_t* adc_data )
       HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
       I_cnt = 0;
     }
-
-    // I_q = cal_Iq_Id(I_u,I_w,I_v,elecangle);
-    I_q = cal_Iq_Id(I_u,I_w,I_v,_electricalAngle());
+    ////只控制Q轴电流，不管D轴则取消注释
+    // I_q = cal_Iq(I_u,I_w,I_v,_electricalAngle());
+    cal_Iq_Id(I_u,I_w,I_v,_electricalAngle(), &I_q1_I_d2[0], &I_q1_I_d2[1]);
     if (first_cnt < 5000){
       first_cnt++;
     }else{
-      my_U = PID_calc(&pid_cur,I_q,my_aim);
+      my_Iq_out = PID_calc(&pid_cur_q,I_q1_I_d2[0],my_aim);
+      my_Id_out = PID_calc(&pid_cur_d,I_q1_I_d2[1],0.0f);
     }
   }
   whl_cnt++;
 
   // DMA_to_Vofa(I_u,I_v,I_w);
-  DMA_to_Vofa_v5(I_q,speed_rpm, my_aim,I_v,I_w);
+  DMA_to_Vofa_v5(speed_rpm,I_q1_I_d2[0],I_q1_I_d2[1],I_v,I_w);
 
 }
 //ADC采样中断函数
@@ -236,18 +239,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
   if(htim->Instance == TIM3){ // 判断是定时器3发生的中断
     TIM3_Cnt1 ++;             // 定时器3每中断一次，计数器自加1
     if (I_flag < 2){
-      DFOC_M0_setTorque(0);
+      setTorque_QD(0,0,_electricalAngle());
     }else{
-
-      // elecangle=elecangle+0.001f;
+      //想看电流波形，解除注释
+      // elecangle=elecangle+0.01f;
       // if (elecangle > 2*PI){
       //   elecangle -= 2*PI;
       // }
       // setTorque(2.0,elecangle);
-      if (my_U > 12.0f) my_U = 12.0f;
-      else if (my_U < -12.0f) my_U = -12.0f;
-      setTorque(my_U,_electricalAngle());
-      // setTorque(3.0f,_electricalAngle());
+      setTorque_QD(my_Iq_out,my_Id_out,_electricalAngle());
     }
 
   }
@@ -321,7 +321,7 @@ int main(void)
   // zero_electric_angle=_electricalAngle();
   // setPhaseVoltage(0, 0,_3PI_2);
 #if motor_id==1
-  zero_electric_angle = 5.66323662f;     //1
+  zero_electric_angle = 4.2546978f;     //1
 #endif
 #if motor_id==2
   zero_electric_angle = 3.53115416f;     //2
@@ -337,8 +337,12 @@ int main(void)
   __HAL_ADC_ENABLE_IT(&hadc1, ADC_IT_JEOC);
   HAL_ADCEx_InjectedStart(&hadc1);
   float pid_param[3] = {1.0f,0.038f,0.0f};
-  PID_init(&pid_cur,PID_POSITION,pid_param,12.0f,12.0f);
-  PID_clear(&pid_cur);
+  PID_init(&pid_cur_q,PID_POSITION,pid_param,12.0f,12.0f);
+  PID_init(&pid_cur_d,PID_POSITION,pid_param,12.0f,12.0f);
+
+  PID_clear(&pid_cur_q);
+  PID_clear(&pid_cur_d);
+
   USER_FDCAN_Filter_Init();
   CAN_RegisterCallback((CAN_Data_Callback)CAN_Data_Handler);
 
@@ -366,7 +370,7 @@ int main(void)
      speed_rpm = Encoder_Err / 8191.0f/Dt_Encoder * 60.0f;
 
     uint8_t tx_data[8] = {0};
-    CAN_cmd(Encoder,speed_rpm,(int16_t)(I_q*10000),0x00);
+    CAN_cmd(Encoder,speed_rpm,(int16_t)(I_q1_I_d2[0]*10000),0x00);
     HAL_Delay(1);
 
     /* USER CODE END WHILE */
