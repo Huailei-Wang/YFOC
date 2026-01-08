@@ -87,9 +87,94 @@ void setPwm(float Ua, float Ub, float Uc){
   dc_a = _constrain(Ua / voltage_power_supply, 0.0f , 1.0f );
   dc_b = _constrain(Ub / voltage_power_supply, 0.0f , 1.0f );
   dc_c = _constrain(Uc / voltage_power_supply, 0.0f , 1.0f );
-  htim3.Instance->CCR1 = 999-dc_a*999;
-  htim3.Instance->CCR2 = 999-dc_b*999;
-  htim3.Instance->CCR4 = 999-dc_c*999;
+  htim3.Instance->CCR1 = 1000-dc_a*1000;
+  htim3.Instance->CCR2 = 1000-dc_b*1000;
+  htim3.Instance->CCR4 = 1000-dc_c*1000;
+}
+
+void setSVPWM(float Ua, float Ub, float Uc) {
+  float X ,Y ,Z = 0;
+  float T1,T2,T1Temp,T2Temp = 0;
+  uint8_t A,B,C,N = 0;
+  uint16_t Ta,Tb,Tc = 0;
+  if(Ua > 0){A = 1;} else{A = 0;}
+  if(Ub > 0){B = 1;} else{B = 0;}
+  if(Uc > 0){C = 1;} else{C = 0;}
+  N = 4 * C + 2 * B + A;
+
+  X = (1.732f * 2000 * Ualpha) / voltage_power_supply;
+  Y = (1.5f * Ubeta * 2000 + 0.866f * Ualpha * 2000) / voltage_power_supply;
+  Z = (-1.5f * Ubeta * 2000 + 0.866f * Ualpha * 2000) / voltage_power_supply;
+
+  switch(N) {
+    case 3: {T1 = -Z; T2 =  X;} break;
+    case 1: {T1 =  Z; T2 =  Y;} break;
+    case 5: {T1 =  X; T2 = -Y;} break;
+    case 4: {T1 = -X; T2 =  Z;} break;
+    case 6: {T1 = -Y; T2 = -Z;} break;
+    case 2: {T1 =  Y; T2 = -X;} break;
+    default:{T1 = 0;  T2=0;}    break;
+  }
+      T1Temp = T1;
+      T2Temp = T2;
+
+      if(T1+T2 > 1900)
+      {
+        T1 = 1900 * T1Temp / (T1Temp + T2Temp);
+        T2 = 1900 * T2Temp / (T1Temp + T2Temp);
+      }
+
+      Ta = (2000 - T1 - T2) * 0.25f;
+      Tb = Ta + T1 * 0.5f;
+      Tc = Tb + T2 * 0.5f;
+
+      switch(N)
+      {
+        case 3:
+        {
+          htim3.Instance->CCR1 = Ta;
+          htim3.Instance->CCR2 = Tb;
+          htim3.Instance->CCR4 = Tc;
+        } break;
+        case 1:
+        {
+           htim3.Instance->CCR1 = Tb;
+           htim3.Instance->CCR2 = Ta;
+           htim3.Instance->CCR4 = Tc;
+        } break;
+        case 5:
+        {
+           htim3.Instance->CCR1 = Tc;
+           htim3.Instance->CCR2 = Ta;
+           htim3.Instance->CCR4 = Tb;
+        } break;
+        case 4:
+        {
+           htim3.Instance->CCR1 = Tc;
+           htim3.Instance->CCR2 = Tb;
+           htim3.Instance->CCR4 = Ta;
+        } break;
+        case 6:
+        {
+           htim3.Instance->CCR1 = Tb;
+           htim3.Instance->CCR2 = Tc;
+           htim3.Instance->CCR4 = Ta;
+        } break;
+        case 2:
+        {
+           htim3.Instance->CCR1 = Ta;
+           htim3.Instance->CCR2 = Tc;
+           htim3.Instance->CCR4 = Tb;
+        } break;
+        default:
+        {
+           htim3.Instance->CCR1 = Ta;
+           htim3.Instance->CCR2 = Tb;
+           htim3.Instance->CCR4 = Tc;
+        }break;
+      }
+
+
 }
 float _normalizeAngle(float angle){
   float a = fmod(angle, 2*PI);   //取余运算可以用于归一化，列出特殊值例子算便知
@@ -134,9 +219,29 @@ void setTorque_QD(float Uq, float Ud, float angle_el) {
   Ubeta  = Ud * st + Uq * ct;
   // 克拉克逆变换 (Inverse Clarke Transform)
   Ua = Ualpha + voltage_power_supply/2;
-  Ub = (sqrtf(3.0f)*Ubeta - Ualpha)/2.0f + voltage_power_supply/2.0f;
-  Uc = (-Ualpha - sqrtf(3.0f)*Ubeta)/2.0f + voltage_power_supply/2.0f;
+  Ub = 0.866f*Ubeta   - 0.5f*Ualpha + voltage_power_supply/2.0f;
+  Uc = - 0.866f*Ubeta -0.5f*Ualpha + voltage_power_supply/2.0f;
   setPwm(Ua, Ub, Uc);
+
+}
+void setTorque_QD_SVPWM(float Uq, float Ud, float angle_el) {
+  getAngle(); //更新传感器数值
+  // 限制 Uq 和 Ud 的范围
+  Uq = _constrain(Uq, -(voltage_power_supply)/2, (voltage_power_supply)/2);
+  Ud = _constrain(Ud, -(voltage_power_supply)/2, (voltage_power_supply)/2);
+  angle_el = _normalizeAngle(angle_el);
+  // 提前计算 sin 和 cos，节省计算资源
+  float ct = arm_cos_f32(angle_el);
+  float st = arm_sin_f32(angle_el);
+  // 帕克逆变换 (Inverse Park Transform)
+  Ualpha = Ud * ct - Uq * st;
+  Ubeta  = Ud * st + Uq * ct;
+  // 克拉克逆变换 (Inverse Clarke Transform)
+  Ua = Ualpha ;
+  Ub = 0.866f*Ubeta - 0.5f*Ualpha ;
+  Uc = - 0.866f*Ubeta -0.5f*Ualpha ;
+
+  setSVPWM(Ua, Ub, Uc);
 }
 
 // 定时器更新中断回调函数
@@ -203,8 +308,6 @@ void process_adc(const uint16_t* adc_data )
       HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
       I_cnt = 0;
     }
-    ////只控制Q轴电流，不管D轴则取消注释
-    // I_q = cal_Iq(I_u,I_w,I_v,_electricalAngle());
     cal_Iq_Id(I_u,I_w,I_v,_electricalAngle(), &I_q1_I_d2[0], &I_q1_I_d2[1]);
     if (first_cnt < 5000){
       first_cnt++;
@@ -214,8 +317,6 @@ void process_adc(const uint16_t* adc_data )
     }
   }
   whl_cnt++;
-
-  // DMA_to_Vofa(I_u,I_v,I_w);
   DMA_to_Vofa_v5(speed_rpm,I_q1_I_d2[0],I_q1_I_d2[1],I_v,I_w);
 
 }
@@ -241,20 +342,23 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
     if (I_flag < 2){
       setTorque_QD(0,0,_electricalAngle());
     }else{
-      //想看电流波形，解除注释
-      // elecangle=elecangle+0.01f;
+      ////想看电流波形，解除注释
+      // elecangle=elecangle+0.005f;
       // if (elecangle > 2*PI){
       //   elecangle -= 2*PI;
       // }
-      // setTorque(2.0,elecangle);
+      // setTorque_QD_SVPWM(3.0f,0.0f,elecangle);
+
+      // setTorque_QD(3.0f,0.0f,elecangle);
+
       setTorque_QD(my_Iq_out,my_Id_out,_electricalAngle());
+      // setTorque_QD_SVPWM(my_Iq_out,my_Id_out,_electricalAngle());
     }
 
   }
 }
-uint8_t whl_num = 0;
+
 CAN_Data_Callback CAN_Data_Handler(uint8_t* data, size_t len){
-whl_num++;
   if (len != 8)return NULL;
 #if motor_id==1
    my_aim = (float)((int16_t)(data[0] << 8 | data[1]) /32768.0f); //1
@@ -336,7 +440,22 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim3);
   __HAL_ADC_ENABLE_IT(&hadc1, ADC_IT_JEOC);
   HAL_ADCEx_InjectedStart(&hadc1);
-  float pid_param[3] = {1.0f,0.038f,0.0f};
+  /*
+   * FOC PI参数计算 (FOC PI Parameter Calculation)
+   * L (Phase Inductance) = 3.26 mH = 0.00326 H
+   * R (Phase Resistance) = 10.32 Ohm
+   * Ts (Sampling Time) = 1 / 21250 Hz ≈ 47 us (Assuming 21.25kHz PWM/Control Loop)
+   * Bandwidth (Target Current Loop Bandwidth) = 1000 rad/s (~160 Hz)
+   *
+   * Formula:
+   * Kp = L * Bandwidth
+   * Ki = R * Bandwidth * Ts
+   *
+   * Calculation:
+   * Kp = 0.00326 * 1000 = 3.26
+   * Ki = 10.32 * 1000 * 0.000047 ≈ 0.485
+   */
+  float pid_param[3] = {3.26f, 0.485f, 0.0f}; //1.0f 0.038f
   PID_init(&pid_cur_q,PID_POSITION,pid_param,12.0f,12.0f);
   PID_init(&pid_cur_d,PID_POSITION,pid_param,12.0f,12.0f);
 
@@ -357,6 +476,8 @@ int main(void)
   while (1)
   {
     Dt_Encoder = BSP_DWT_GetDeltaT64(&loop_tick);
+    float speed_rpm_last = 0.0f;
+    speed_rpm_last = speed_rpm;
     static int16_t Last_Encoder = 0;
     static int16_t Encoder = 0;
     int16_t Encoder_Err = 0;
@@ -364,13 +485,12 @@ int main(void)
     Encoder = (int16_t)(my_position*180.0f/PI/0.08789*2.0f);
     Encoder_Err = Encoder - Last_Encoder;//Encoder > Last_Encoder反转转到0了;
      if (abs(Encoder_Err) > 4096){
-      if (Encoder_Err > 0) Encoder_Err = -(Last_Encoder + 8191 - Encoder);
-      else Encoder_Err =  Encoder + 8191 - Last_Encoder;
+      if (Encoder_Err > 0) Encoder_Err = -(Last_Encoder + 8192 - Encoder);
+      else Encoder_Err =  Encoder + 8192 - Last_Encoder;
      }
-     speed_rpm = Encoder_Err / 8191.0f/Dt_Encoder * 60.0f;
-
+     speed_rpm = 0.9f*Encoder_Err / 8192.0f/Dt_Encoder * 60.0f + 0.1f*speed_rpm_last;
     uint8_t tx_data[8] = {0};
-    CAN_cmd(Encoder,speed_rpm,(int16_t)(I_q1_I_d2[0]*10000),0x00);
+    CAN_cmd(Encoder,(int16_t)speed_rpm,(int16_t)(I_q1_I_d2[0]*10000),0x00);
     HAL_Delay(1);
 
     /* USER CODE END WHILE */
