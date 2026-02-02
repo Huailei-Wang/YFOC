@@ -160,6 +160,21 @@ uint8_t can_send_data[8];
 void CAN_cmd(int16_t encoder, int16_t speed, int16_t current, uint8_t temperature){
   uint32_t send_mail_box;
   tx_message.IdType = FDCAN_STANDARD_ID;
+#if motor_type == 3505
+#if motor_id==4
+  tx_message.Identifier = 0x204;//4
+#endif
+#if motor_id==3
+  tx_message.Identifier = 0x203;//3
+#endif
+#if motor_id==2
+  tx_message.Identifier = 0x202;//2
+#endif
+#if motor_id==1
+  tx_message.Identifier = 0x201;//1
+#endif
+#endif
+#if motor_type == 4310
 #if motor_id==4
   tx_message.Identifier = 0x208;//4
 #endif
@@ -171,6 +186,7 @@ void CAN_cmd(int16_t encoder, int16_t speed, int16_t current, uint8_t temperatur
 #endif
 #if motor_id==1
   tx_message.Identifier = 0x205;//1
+#endif
 #endif
   tx_message.TxFrameType = FDCAN_DATA_FRAME;
   tx_message.DataLength = 0x08;
@@ -196,12 +212,22 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hcan ,uint32_t RxFifo0ITs){
     whl_num2 ++;
     if (rx_header.IdType == FDCAN_STANDARD_ID){
       switch (rx_header.Identifier){
+#if motor_type == 4310
       case 0x1FF:
         if (can_data_callback != NULL) can_data_callback(rx_data, rx_header.DataLength);
         break;
       default:
         break;
       }
+#endif
+#if motor_type == 3505
+      case 0x200:
+      if (can_data_callback != NULL) can_data_callback(rx_data, rx_header.DataLength);
+      break;
+      default:
+      break;
+    }
+#endif
     }
   }
 }

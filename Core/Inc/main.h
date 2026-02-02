@@ -32,6 +32,7 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #define motor_id 1
+#define motor_type 3505
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
