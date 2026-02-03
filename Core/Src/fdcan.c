@@ -142,12 +142,20 @@ __IO CAN_t can = {0};
 void USER_FDCAN_Filter_Init(void){
   // 过滤器结构体
   FDCAN_FilterTypeDef  sFilterConfig;
-  // sFilterConfig.IdType = FDCAN_STANDARD_ID;		//标准帧
+  sFilterConfig.IdType = FDCAN_STANDARD_ID;		//标准帧
   sFilterConfig.FilterIndex = 0;					//几路can就是几
   sFilterConfig.FilterType = FDCAN_FILTER_MASK;
   sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+#if motor_type == 4310
+  sFilterConfig.FilterID1 = 0x1ff;
+  sFilterConfig.FilterID2 = 0x7ff;
+#elif motor_type == 3505
+  sFilterConfig.FilterID1 = 0x200;
+  sFilterConfig.FilterID2 = 0x7ff;
+#else
   sFilterConfig.FilterID1 = 0x00000000;
   sFilterConfig.FilterID2 = 0x00000000;
+#endif
   HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig);
   HAL_FDCAN_ConfigGlobalFilter(&hfdcan1,FDCAN_REJECT,FDCAN_REJECT,FDCAN_FILTER_REMOTE,FDCAN_FILTER_REMOTE);
   HAL_FDCAN_ActivateNotification(&hfdcan1,FDCAN_IT_RX_FIFO0_NEW_MESSAGE,0);
@@ -158,33 +166,25 @@ void USER_FDCAN_Filter_Init(void){
 FDCAN_TxHeaderTypeDef tx_message;
 uint8_t can_send_data[8];
 void CAN_cmd(int16_t encoder, int16_t speed, int16_t current, uint8_t temperature){
-  uint32_t send_mail_box;
   tx_message.IdType = FDCAN_STANDARD_ID;
 #if motor_type == 3505
 #if motor_id==4
   tx_message.Identifier = 0x204;//4
-#endif
-#if motor_id==3
+#elif motor_id==3
   tx_message.Identifier = 0x203;//3
-#endif
-#if motor_id==2
+#elif motor_id==2
   tx_message.Identifier = 0x202;//2
-#endif
-#if motor_id==1
+#elif motor_id==1
   tx_message.Identifier = 0x201;//1
 #endif
-#endif
-#if motor_type == 4310
+#elif motor_type == 4310
 #if motor_id==4
   tx_message.Identifier = 0x208;//4
-#endif
-#if motor_id==3
+#elif motor_id==3
   tx_message.Identifier = 0x207;//3
-#endif
-#if motor_id==2
+#elif motor_id==2
   tx_message.Identifier = 0x206;//2
-#endif
-#if motor_id==1
+#elif motor_id==1
   tx_message.Identifier = 0x205;//1
 #endif
 #endif
@@ -216,18 +216,14 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hcan ,uint32_t RxFifo0ITs){
       case 0x1FF:
         if (can_data_callback != NULL) can_data_callback(rx_data, rx_header.DataLength);
         break;
+#elif motor_type == 3505
+      case 0x200:
+        if (can_data_callback != NULL) can_data_callback(rx_data, rx_header.DataLength);
+        break;
+#endif
       default:
         break;
       }
-#endif
-#if motor_type == 3505
-      case 0x200:
-      if (can_data_callback != NULL) can_data_callback(rx_data, rx_header.DataLength);
-      break;
-      default:
-      break;
-    }
-#endif
     }
   }
 }

@@ -296,7 +296,7 @@ float elecangle =0;
 int first_cnt = 0;
 
 float my_aim = 0.0f;
-float my_aim_Torque = 0.0f;
+int16_t my_aim_Torque = 0.0f;
 float my_Torque = 0.0f;
 /*
  *永磁体磁链  =  Kt/(1.5 * Pp)
@@ -305,14 +305,29 @@ float my_Torque = 0.0f;
 void cal_Torque(float Iq, float Id, float* torque){
 #if motor_type == 4310
   float Flux_Linkage = 0.01095f; //永磁体磁链
-#endif
-#if motor_type == 3505
+#elif motor_type == 3505
   float Flux_Linkage =  0.004848f; //永磁体磁链
 #endif
   *torque = 1.5f * (float)PP * Iq * Flux_Linkage;   //T  = 1.5 * Pp * Iq * 永磁体磁链
 }
-void process_adc(const uint16_t* adc_data )
-{
+float int_2_float (int16_t n_int16,float max_fp){
+  const float n_float = ((float)n_int16)/32768.0f*max_fp;
+  return n_float;
+}
+
+float Torque_2_Current(int16_t Torque_aim){
+  float Iq_out = 0;
+#if motor_type == 4310
+  float Flux_Linkage = 0.01095f; //永磁体磁链
+  float Torque_aim_f = int_2_float(Torque_aim,0.5f);
+#elif motor_type == 3505
+  float Flux_Linkage =  0.004848f; //永磁体磁链
+  float Torque_aim_f = int_2_float(Torque_aim,0.15f);
+#endif
+  Iq_out = (float)Torque_aim_f / (1.5f * (float)PP * Flux_Linkage);
+  return Iq_out;
+}
+void process_adc(const uint16_t* adc_data ){
   static float last_Iu = 0.0f;
   static float last_Iw = 0.0f;
   static float Iu_offset = 0.0f;
@@ -333,7 +348,6 @@ void process_adc(const uint16_t* adc_data )
       Iw_offset /= 5000.0f;
       I_flag = 2;
       I_cnt = 0;
-
     }
   }
   if (I_flag == 2){
@@ -353,7 +367,6 @@ void process_adc(const uint16_t* adc_data )
   }
   whl_cnt++;
   DMA_to_Vofa_v5(my_Torque,I_q1_I_d2[0],I_q1_I_d2[1],I_v,I_w);
-
 }
 //ADC采样中断函数
 uint16_t aADCxINJConvertedData[2] = {0};
@@ -392,21 +405,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
   }
 }
 //todo
-// CAN数据处理回调函数的目标转矩处理
+// CAN数据处理回调函数的目标转矩处理    先接收数据，通过缩放得到目标力矩，力矩转化成目标Q轴电流，缩放是把0.几的力矩转换到-32768~32,768范围内
+
 CAN_Data_Callback CAN_Data_Handler(uint8_t* data, size_t len){
   if (len != 8)return NULL;
 #if motor_id==1
-   my_aim = (float)((int16_t)(data[0] << 8 | data[1]) /32768.0f)*2; //1
+   my_aim_Torque = (int16_t)(data[0] << 8 | data[1]); //1
+#elif motor_id==2
+   my_aim_Torque = (int16_t)(data[2] << 8 | data[3]) ; //2
+#elif motor_id==3
+   my_aim_Torque = (int16_t)(data[4] << 8 | data[5]); //3
+#elif motor_id==4
+  my_aim_Torque =  (int16_t)(data[6] << 8 | data[7]); //4
 #endif
-#if motor_id==2
-   my_aim = (float)((int16_t)(data[2] << 8 | data[3]) /32768.0f); //2
-#endif
-#if motor_id==3
-   my_aim = (float)((int16_t)(data[4] << 8 | data[5]) /32768.0f); //3
-#endif
-#if motor_id==4
-  my_aim = (float)((int16_t)(data[6] << 8 | data[7]) /32768.0f); //4
-#endif
+  my_aim = Torque_2_Current(my_aim_Torque);
   return NULL;
 }
 /* USER CODE END 0 */
@@ -450,40 +462,37 @@ int main(void)
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);  // 启动TIM3的PWM通道
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-
-  HAL_GPIO_WritePin(LED_GPIO_Port,LED_Pin,GPIO_PIN_RESET);
   HAL_GPIO_WritePin(EN_GPIO_Port,EN_Pin,GPIO_PIN_SET);
+
+
+
   //编码器0点校准，取消注释后生效
   // setPhaseVoltage(5, 0,_3PI_2);
-  // HAL_Delay(100);
+  // HAL_Delay(1000);
   // getAngle_Without_track(&my_position);
   // zero_electric_angle=_electricalAngle();
   // setPhaseVoltage(0, 0,_3PI_2);
+
+
+
 #if motor_type == 4310
 #if motor_id==1
-  zero_electric_angle = 4.2546978f;     //1
+  zero_electric_angle = 5.93010378f;     //1
+#elif motor_id==2
+  zero_electric_angle = 3.97551537f;     //2
+#elif motor_id==3
+  zero_electric_angle = 3.42031193f;    //3
+#elif motor_id==4
+  zero_electric_angle = 4.19658279f;     //4
 #endif
-#if motor_id==2
-  zero_electric_angle = 3.53115416f;     //2
-#endif
-#if motor_id==3
-  zero_electric_angle = 1.09209728;    //3
-#endif
-#if motor_id==4
-  zero_electric_angle = 0.26024437f;     //4
-#endif
-#endif
-#if motor_type == 3505
+#elif motor_type == 3505
 #if motor_id==1
-  zero_electric_angle = 6.2145133f;     //1
-#endif
-#if motor_id==2
-  zero_electric_angle = 6.05028772f;     //2
-#endif
-#if motor_id==3
+  zero_electric_angle = 5.98564053f;     //1
+#elif motor_id==2
+  zero_electric_angle = 6.22805166f;     //2
+#elif motor_id==3
   zero_electric_angle = 1.09209728;    //3
-#endif
-#if motor_id==4
+#elif motor_id==4
   zero_electric_angle = 0.26024437f;     //4
 #endif
 #endif
@@ -497,19 +506,16 @@ int main(void)
    * R (Phase Resistance) = 10.32 Ohm
    * Ts (Sampling Time) = 1 / 21250 Hz ≈ 47 us (Assuming 21.25kHz PWM/Control Loop)
    * Bandwidth (Target Current Loop Bandwidth) = 1000 rad/s (~160 Hz)
-   *
    * Formula:
    * Kp = L * Bandwidth
    * Ki = R * Bandwidth * Ts
-   *
    * Calculation:
    * Kp = 0.00326 * 1000 = 3.26
    * Ki = 10.32 * 1000 * 0.000047 ≈ 0.485
    */
 #if motor_type == 4310
   float pid_param[3] = {3.26f, 0.485f, 0.0f}; //1.0f 0.038f
-#endif
-#if motor_type == 3505
+#elif motor_type == 3505
   float pid_param[3] = {1.27f, 0.308f, 0.0f};
 #endif
   PID_init(&pid_cur_q,PID_POSITION,pid_param,12.0f,12.0f);
@@ -520,7 +526,6 @@ int main(void)
 
   USER_FDCAN_Filter_Init();
   CAN_RegisterCallback((CAN_Data_Callback)CAN_Data_Handler);
-
   BSP_DWT_Init();
   uint32_t loop_tick = 0;
   BSP_DWT_GetDeltaT(&loop_tick);
